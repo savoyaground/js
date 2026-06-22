@@ -1,20 +1,41 @@
-<script type="module">
 import { feature } from 'https://esm.sh/topojson-client@3';
 import { geoContains } from 'https://esm.sh/d3-geo@3';
 
+/* ==================================================
+   3D DOTTED GLOBE
+================================================== */
+
 const globeEl = document.getElementById('globeViz');
 
-let started = false;
+if (globeEl) {
+  let started = false;
 
-const observer = new IntersectionObserver((entries) => {
-  if (!entries[0].isIntersecting || started) return;
-  started = true;
-  initGlobe();
-}, { rootMargin: '200px' });
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (!entries[0].isIntersecting || started) return;
 
-observer.observe(globeEl);
+      started = true;
+      observer.disconnect();
+      initGlobe();
+    },
+    {
+      rootMargin: '200px',
+    }
+  );
+
+  observer.observe(globeEl);
+}
 
 function initGlobe() {
+  if (!globeEl) return;
+
+  if (typeof window.Globe !== 'function') {
+    console.error(
+      'Globe.gl is not loaded. Load the Globe.gl library before partner-globe.js.'
+    );
+    return;
+  }
+
   const DOT_COLOR = '#DD9058';
   const DOT_RADIUS = 0.1;
   const DOT_ALTITUDE = 0.0025;
@@ -24,11 +45,10 @@ function initGlobe() {
   const BASE_LNG = -18;
   const BASE_ALTITUDE = 1.25;
 
-  const POINTER_LAT_RANGE = 0;
   const POINTER_LNG_RANGE = 60;
   const CAMERA_LERP = 0.065;
 
-  const globe = new Globe(globeEl)
+  const globe = new window.Globe(globeEl)
     .globeImageUrl(null)
     .bumpImageUrl(null)
     .backgroundImageUrl(null)
@@ -45,46 +65,88 @@ function initGlobe() {
     .height(globeEl.offsetHeight);
 
   const controls = globe.controls();
+
   controls.enableRotate = false;
   controls.enableZoom = false;
 
   function resizeGlobe() {
-    globe.width(globeEl.offsetWidth).height(globeEl.offsetHeight);
+    const width = globeEl.offsetWidth;
+    const height = globeEl.offsetHeight;
+
+    if (!width || !height) return;
+
+    globe.width(width).height(height);
   }
 
-  window.addEventListener('resize', resizeGlobe);
   resizeGlobe();
+  window.addEventListener('resize', resizeGlobe);
 
-  const cameraTarget = { lat: BASE_LAT, lng: BASE_LNG, altitude: BASE_ALTITUDE };
-  const cameraCurrent = { ...cameraTarget };
+  const cameraTarget = {
+    lat: BASE_LAT,
+    lng: BASE_LNG,
+    altitude: BASE_ALTITUDE,
+  };
+
+  const cameraCurrent = {
+    ...cameraTarget,
+  };
 
   globe.pointOfView(cameraCurrent, 0);
 
-  window.addEventListener('pointermove', e => {
-    const nx = (e.clientX / window.innerWidth) * 2 - 1;
-    cameraTarget.lng = BASE_LNG + nx * POINTER_LNG_RANGE;
+  window.addEventListener('pointermove', (event) => {
+    const normalizedX = (event.clientX / window.innerWidth) * 2 - 1;
+
+    cameraTarget.lng =
+      BASE_LNG + normalizedX * POINTER_LNG_RANGE;
+
     cameraTarget.lat = BASE_LAT;
   });
 
-  globeEl.addEventListener('wheel', e => {
-    cameraTarget.lng += e.deltaY * 0.04;
-  }, { passive: true });
+  globeEl.addEventListener(
+    'wheel',
+    (event) => {
+      cameraTarget.lng += event.deltaY * 0.04;
+    },
+    {
+      passive: true,
+    }
+  );
 
-  function longitudeStep(lat, step) {
-    const cos = Math.cos(lat * Math.PI / 180);
-    return step / Math.max(0.28, cos);
+  function longitudeStep(latitude, step) {
+    const cosine = Math.cos((latitude * Math.PI) / 180);
+
+    return step / Math.max(0.28, cosine);
   }
 
   function buildDots(land) {
     const dots = [];
 
-    for (let lat = -58; lat <= 85; lat += LAT_STEP) {
-      const lngStep = longitudeStep(lat, LAT_STEP);
+    for (
+      let latitude = -58;
+      latitude <= 85;
+      latitude += LAT_STEP
+    ) {
+      const longitudeStepSize = longitudeStep(
+        latitude,
+        LAT_STEP
+      );
 
-      for (let lng = -180; lng <= 180; lng += lngStep) {
-        if (!geoContains(land, [lng, lat])) continue;
+      for (
+        let longitude = -180;
+        longitude <= 180;
+        longitude += longitudeStepSize
+      ) {
+        if (!geoContains(land, [longitude, latitude])) {
+          continue;
+        }
 
-        dots.push({ lat, lng, alt: DOT_ALTITUDE, color: DOT_COLOR, size: DOT_RADIUS });
+        dots.push({
+          lat: latitude,
+          lng: longitude,
+          alt: DOT_ALTITUDE,
+          color: DOT_COLOR,
+          size: DOT_RADIUS,
+        });
       }
     }
 
@@ -94,19 +156,37 @@ function initGlobe() {
   function animate() {
     requestAnimationFrame(animate);
 
-    cameraCurrent.lat += (cameraTarget.lat - cameraCurrent.lat) * CAMERA_LERP;
-    cameraCurrent.lng += (cameraTarget.lng - cameraCurrent.lng) * CAMERA_LERP;
+    cameraCurrent.lat +=
+      (cameraTarget.lat - cameraCurrent.lat) * CAMERA_LERP;
+
+    cameraCurrent.lng +=
+      (cameraTarget.lng - cameraCurrent.lng) * CAMERA_LERP;
 
     globe.pointOfView(cameraCurrent, 0);
   }
 
-  fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json')
-    .then(res => res.json())
-    .then(topology => {
-      const land = feature(topology, topology.objects.land);
+  fetch(
+    'https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json'
+  )
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(
+          `World atlas request failed: ${response.status}`
+        );
+      }
+
+      return response.json();
+    })
+    .then((topology) => {
+      const land = feature(
+        topology,
+        topology.objects.land
+      );
+
       globe.pointsData(buildDots(land));
       animate();
+    })
+    .catch((error) => {
+      console.error('Unable to initialize the globe:', error);
     });
 }
-</script>
-<!-- END: 3d Globe -->
